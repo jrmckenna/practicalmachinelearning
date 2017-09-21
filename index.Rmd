@@ -11,20 +11,174 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+1. Background (from assignment)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
 
-```{r cars}
-summary(cars)
+
+2. Data (from assignment)
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har and can be cited as:
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+3. Data Structure Exploration & Cleaning
+
+We first load the libraries we shall require:
+
+```{r}
+library(caret)
+library(rattle)
+library(ggplot2)
+library(randomForest)
 ```
 
-## Including Plots
+We now examine the raw data and determine what pre-processing is required (if any):
 
-You can also embed plots, for example:
+```{r, echo=FALSE}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+training <- read.csv("pml-training.csv", na.strings = c("NA", ""))
+testing <- read.csv("pml-testing.csv", na.strings = c("NA", ""))
+#
+str(training)
+str(testing)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+The training data has 19,622 observations and 160 variables, whereas the testing data contains only 20 observations across the 160 variables. We are seeking to predict the outcome of the variable "classe" using as many of the predictors as necessary. "classe" is factor variable with 5 values (A,B,C,D,E):
+
+```{r}
+unique(training$classe)
+```
+
+Its clear the data sets contain significant gaps. Prior knowledge of data analysis helps us quickly check for bias in classe by the user as well as date/time:
+
+```{r}
+table(training$classe, training$user_name, useNA = "ifany")
+#
+table(training$classe, training$cvtd_timestamp, useNA = "ifany")
+```
+
+Failing to observe any obvious bias we next delete the predictors within the training and testing data frames set that contain any missing values and are not required for predicting outcomes:
+
+```{r}
+training <- training[, colSums(is.na(training)) == 0]
+testing <- testing[, colSums(is.na(testing)) == 0]
+#
+trainData <- training[, -c(1:7)]
+testData <- testing[, -c(1:7)]
+```
+
+The pre-processed training and testing data now both have 53 columns (52 predictors and 1 outcome). The training and testing have 19,622 and 20 observations, respectively:
+
+```{r}
+dim(trainData)
+dim(testData)
+```
+
+
+In order to obtain out-of-sample errors, we split the cleaned training set into a training dataset (train = 0.70), and a validation dataset (vali = 0.30) to compute the out-of-sample errors.
+
+```{r}
+set.seed(2112) #for all you RUSH fans!
+inTrain <- createDataPartition(trainData$classe, p = 0.7, list = FALSE)
+train <- trainData[inTrain, ]
+valid <- trainData[-inTrain, ]
+```
+
+
+4. Outcome Prediction: Classification and Regression Trees
+
+We will use two prediction methods to classify the "classe" outcome, and determine the most robust method: Classification and Regression Trees ("cart") and random forests "rf (in the next section).
+
+When using Classification and Regression Trees its a good idea to use k-fold cross validation with k-folds of 5 and 10. We also do not use any  transformations on any predictors:
+
+```{r}
+control <- trainControl(method = "cv", number = 5)
+fit_rpart <- train(classe ~ ., data = train, method = "rpart", 
+                   trControl = control)
+print(fit_rpart, digits = 4)
+#
+control <- trainControl(method = "cv", number = 10)
+fit_rpart <- train(classe ~ ., data = train, method = "rpart", 
+                   trControl = control)
+print(fit_rpart, digits = 4)
+```
+
+Using 10-fold cross validation results in almost identical cp, accuracy, and Kappa when using 5, so we use k0fold = 5 for compuational efficiency. Plotting the results we observe that our tree fails to predict any "D" outcomes which seems suspicious.
+
+```{r, echo=FALSE}
+fancyRpartPlot(fit_rpart$finalModel)
+```
+
+We now predict the outcome using our withheld validation set:
+
+```{r}
+predict_rpart <- predict(fit_rpart, valid)
+confuse_rpart <- confusionMatrix(valid$classe, predict_rpart)
+confuse_rpart
+accuracy_rpart <- confuse_rpart$overall[1]
+writeLines(c("\nCART Accuracy:", as.character(format(accuracy_rpart, nsmall = 4))))
+```
+
+
+Our predicted accuracy using the validation dataset is about 0.4943, so the out-of-sample error rate is about 0.5057 which is unacceptable.
+
+We next try the Random Forest method for predicting the "classe" outcome. 
+
+
+5. Outcome Prediction: Random Forest
+
+We use the training data from the "cart" anaylsis above, and after considerable computtional expnse obtain:
+
+```{r}
+control <- trainControl(method = "cv", number = 5)
+fit_rf <- train(classe ~ ., data = train, method = "rf", 
+                trControl = control)
+print(fit_rf, digits = 4)
+```
+
+Examinig our "rf" final model fit shows a much more robust classification for "rf" than "cart":
+
+```{r}
+print(fit_rf$finalModel, digits = 4)
+```
+
+We now predict the outcomes using "rf" on our validation set:
+```{r}
+predict_rf <- predict(fit_rf, valid)
+confuse_rf <- confusionMatrix(valid$classe, predict_rf)
+confuse_rf
+accuracy_rf <- confuse_rf$overall[1]
+writeLines(c("\nRF Accuracy:", as.character(format(accuracy_rf, nsmall = 4))))
+```
+
+It is clear that the Random Forest method ("rf" is much more robust at predicting the outcomes ("classe") than the Classification and Regression Trees ("cart" method. The "rf" prediction accuracy using the validation dataset is 0.9961, which yields an out-of-sample error rate iof  0.0039. 
+
+
+6. Predictions with Test Data using the Random Forrest Method
+
+We now use the "rf" method to predict the outcome variable "classe"" for the testing set:
+
+```{r}
+yy<-predict(fit_rf, testData)
+yy
+```
+
+
+7. Conclusion
+
+Random Forest is clearly a superior predictor of desired outcomes.  Classification and Regression Trees may fail in this example due to the fact that many predictors are highly correlated (this could be verified with Principle Component Analysis). For example, since Random Forests selects a smaller set of the predictors at each calculated split and decorrelates the resulting trees, it is inheritly more accurate. 
+
+Random Forests is not without issues, however, as the algorithm may sometimes be difficult to interpret, and is very computationaly inefficient.
+
+
+
